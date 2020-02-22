@@ -8,6 +8,7 @@ uses
 
 begin
   Application.Initialize;
+  Application.Title := 'CliqSound';
   Application.CreateForm(TKeyForm, KeyForm);
   Application.Run;
 end.
