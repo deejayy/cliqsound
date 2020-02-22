@@ -4,16 +4,24 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls;
+  Dialogs, StdCtrls, WaveMix;
+
+const
+  KeyEvent = WM_USER + 1;
 
 type
   TKeyForm = class(TForm)
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+  private
+    procedure KeyEventHandler(var Msg : TMessage); message KeyEvent;
   end;
 
 var
   KeyForm: TKeyForm;
+  WaveMix: TWaveMix;
+  WaveFileKeyDown, WaveFileKeyUp: PMixWave;
+  CurrentChannel: integer;
 
 implementation
 
@@ -25,12 +33,33 @@ function DelKeyHook : Longint; stdcall; external 'Key.dll';
 
 procedure TKeyForm.FormCreate(Sender: TObject);
 begin
+ WaveMix := TWaveMix.Create();
+ WaveFileKeyDown := WaveMix.OpenFromFile('keydown.wav');
+ WaveFileKeyUp := WaveMix.OpenFromFile('keyup.wav');
+ WaveMix.Channels := $FF;
+ WaveMix.Activated := true;
  SetKeyHook;
 end;
 
 procedure TKeyForm.FormDestroy(Sender: TObject);
 begin
  DelKeyHook;
+ WaveMix.Destroy();
+end;
+
+procedure TKeyForm.KeyEventHandler(var Msg: TMessage);
+var KeyState: integer;
+begin
+  KeyState := Msg.LParam shr 30;
+  if (KeyState = 0) then begin
+	Inc(CurrentChannel);
+    WaveMix.Play(CurrentChannel mod 16, WaveFileKeyDown, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+  end;
+
+  if (KeyState = 3) then begin
+	Inc(CurrentChannel);
+    WaveMix.Play(CurrentChannel mod 16, WaveFileKeyUp, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+  end;
 end;
 
 end.

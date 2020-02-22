@@ -1,6 +1,6 @@
 object KeyForm: TKeyForm
-  Left = 1108
-  Top = 456
+  Left = 824
+  Top = 403
   Width = 285
   Height = 90
   Caption = 'Clickety-click'
@@ -12,7 +12,7 @@ object KeyForm: TKeyForm
   Font.Style = []
   KeyPreview = True
   OldCreateOrder = False
-  Position = poDesktopCenter
+  Position = poScreenCenter
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   PixelsPerInch = 96

