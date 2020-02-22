@@ -21,7 +21,6 @@ var
   KeyForm: TKeyForm;
   WaveMix: TWaveMix;
   WaveFileKeyDown, WaveFileKeyUp: PMixWave;
-  CurrentChannel: integer;
 
 implementation
 
@@ -44,6 +43,7 @@ end;
 procedure TKeyForm.FormDestroy(Sender: TObject);
 begin
  DelKeyHook;
+ WaveMix.Activated := false;
  WaveMix.Destroy();
 end;
 
@@ -52,13 +52,11 @@ var KeyState: integer;
 begin
   KeyState := Msg.LParam shr 30;
   if (KeyState = 0) then begin
-	Inc(CurrentChannel);
-    WaveMix.Play(CurrentChannel mod 16, WaveFileKeyDown, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+    WaveMix.Play(Msg.WParam mod 8, WaveFileKeyDown, nil, WMIX_CLEARQUEUE or WMIX_HIGHPRIORITY, 0);
   end;
 
   if (KeyState = 3) then begin
-	Inc(CurrentChannel);
-    WaveMix.Play(CurrentChannel mod 16, WaveFileKeyUp, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+    WaveMix.Play(Msg.WParam mod 8, WaveFileKeyUp, nil, WMIX_CLEARQUEUE or WMIX_HIGHPRIORITY, 0);
   end;
 end;
 

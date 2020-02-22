@@ -91,7 +91,7 @@ const
    COUNTNODES = 0;
    DEBUGOUTPUT = 0;
    SILENCE = $80;
-   MAXCHANNELS = 8;
+   MAXCHANNELS = 16;
    MINWAVEBLOCKS = 2;
    MAXWAVEBLOCKS = 6;
    BYTESPERSAMPLE = 1;
@@ -114,7 +114,7 @@ const
    DEFAULT_GOODWAVPOS = 0;    // use timeGetTime()           */
    DEFAULT_WAVEBLOCKS = 3;    // number of ping-pong buffers */
    DEFAULT_WAVEBLOCKLEN = 0;    // 0 forces code to figure DMA size */
-   DEFAULT_SAMPLESPERSEC = 11;	 // 11025 hz                    */
+   DEFAULT_SAMPLESPERSEC = 44;	 // 44 khz                    */
 
    gszAppName: string = 'WavMix32';
    gszDefault: string = 'default';
@@ -2275,9 +2275,9 @@ begin
 
    gfCorrectlyInstalled := TRUE;
 
-	giDebug := GetPrivateProfileInt('general', 'debug', 0, gszIniFile);
+   giDebug := GetPrivateProfileInt('general', 'debug', 0, gszIniFile);
 
-	wc.hCursor        := LoadCursor(0, IDC_ARROW);
+   wc.hCursor        := LoadCursor(0, IDC_ARROW);
    wc.hIcon          := 0;
    wc.lpszMenuName   := nil;
    wc.lpszClassName  := Pointer(gszAppName);
