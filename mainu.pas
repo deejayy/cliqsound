@@ -30,6 +30,8 @@ function DelKeyHook : Longint; stdcall; external 'Key.dll';
 
 {$R *.dfm}
 
+var i: integer = 0; 
+
 procedure TKeyForm.FormCreate(Sender: TObject);
 begin
  WaveMix := TWaveMix.Create();
@@ -50,13 +52,14 @@ end;
 procedure TKeyForm.KeyEventHandler(var Msg: TMessage);
 var KeyState: integer;
 begin
+  inc(i);
   KeyState := Msg.LParam shr 30;
   if (KeyState = 0) then begin
-    WaveMix.Play(Msg.WParam mod 8, WaveFileKeyDown, nil, WMIX_CLEARQUEUE or WMIX_HIGHPRIORITY, 0);
+    WaveMix.Play(i mod 8, WaveFileKeyDown, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
   end;
 
   if (KeyState = 3) then begin
-    WaveMix.Play(Msg.WParam mod 8, WaveFileKeyUp, nil, WMIX_CLEARQUEUE or WMIX_HIGHPRIORITY, 0);
+    WaveMix.Play(i mod 8, WaveFileKeyUp, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
   end;
 end;
 
