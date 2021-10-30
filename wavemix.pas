@@ -1887,7 +1887,7 @@ begin
 		wDeviceID := WAVE_MAPPER;
 
    if (waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY) <> 0) then
-      raise EWaveMixError.Create('The waveform device can�t play this format');
+      raise EWaveMixError.Create('The waveform device can´t play this format');
 
 	{* allocate a header for the wave, this will lets us keep the wave information along with the wave
 	** data, then the calling application has a simpler API to us
