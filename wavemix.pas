@@ -16,7 +16,7 @@ const
    WMIX_NOREMIX = $0002;         {WMixFlush: don't remix sound data}
    WMIX_CHANNELS = $0001;        {WMixConfigure: set channels}
    WMIX_SAMPLINGRATE = $0002;    {WMixConfigure: set playback rate}
-   WMiX_QUEUEWAVE = $0000;       {WMixPlay: play when previous finishes}
+   WMIX_QUEUEWAVE = $0000;       {WMixPlay: play when previous finishes}
    WMIX_CLEARQUEUE = $0001;      {WMixPlay: play sound immediately}
    WMIX_USELRUCHANNEL = $0002;   {WMixPlay: play on next available chan}
    WMIX_HIGHPRIORITY = $0004;    {WMixPlay: remix play buffer immediately}
@@ -1887,7 +1887,7 @@ begin
 		wDeviceID := WAVE_MAPPER;
 
    if (waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY) <> 0) then
-      raise EWaveMixError.Create('The waveform device can´t play this format');
+      raise EWaveMixError.Create('The waveform device canï¿½t play this format');
 
 	{* allocate a header for the wave, this will lets us keep the wave information along with the wave
 	** data, then the calling application has a simpler API to us
