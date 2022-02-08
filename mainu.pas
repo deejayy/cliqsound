@@ -18,6 +18,7 @@ type
   private
     procedure KeyEventHandler(var Msg: TMessage); message KeyEvent;
     procedure LoadSounds(folder: string);
+    function GetSetNames(list: TStrings): TStrings;
   end;
 
 var
@@ -38,16 +39,16 @@ function DelKeyHook: Longint; stdcall; external 'Key.dll';
 {$R *.dfm}
 
 var i: integer = 0;
+var DirList: TStrings;
 
 procedure TKeyForm.FormCreate(Sender: TObject);
 begin
   WaveMix := TWaveMix.Create();
-  WaveFileKeyDown := WaveMix.OpenFromFile('keydown.wav');
-  WaveFileKeyUp := WaveMix.OpenFromFile('keyup.wav');
   WaveMix.Channels := $FF;
   WaveMix.Activated := true;
-  Listbox1.Items := ScanDir;
-  KeyForm.LoadSounds('cherry-mx-red');
+  DirList := ScanDir;
+  Listbox1.Items := KeyForm.GetSetNames(DirList);
+  KeyForm.LoadSounds(DirList.Strings[0]);
   SetKeyHook;
 end;
 
@@ -93,12 +94,23 @@ begin
       until FindNext(SR) <> 0;
       FindClose(SR);
     end;
-
     result := dirlist;
-
   finally
   end;
+end;
 
+function TKeyForm.GetSetNames(list: TStrings): TStrings;
+var i: integer;
+  ini: TIniFile;
+  setname: string;
+begin
+  result := TStringList.Create;
+  for i := 0 to list.count - 1 do
+  begin
+    ini := TInifile.Create('.\sound\' + list.Strings[i] + '\config.ini');
+    setname := ini.ReadString('about', 'name', list.Strings[i]);
+    result.Add(setname);
+  end;
 end;
 
 procedure TKeyForm.LoadSounds(folder: string);
@@ -131,7 +143,7 @@ end;
 
 procedure TKeyForm.ListBox1Click(Sender: TObject);
 begin
-  keyform.loadsounds(listbox1.Items[listbox1.ItemIndex]);
+  keyform.loadsounds(DirList.Strings[listbox1.ItemIndex]);
 end;
 
 end.
