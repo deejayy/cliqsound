@@ -4,10 +4,11 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, WaveMix, Inifiles;
+  Dialogs, StdCtrls, Inifiles;
 
 const
   KeyEvent = WM_USER + 1;
+  MAXFILENAME = 255;
 
 type
   TKeyForm = class (TForm)
@@ -21,10 +22,46 @@ type
     function GetSetNames(list: TStrings): TStrings;
   end;
 
+  PWaveHdr = ^TWaveHdr;
+  {$EXTERNALSYM wavehdr_tag}
+  wavehdr_tag = record
+    lpData: PChar;              { pointer to locked data buffer }
+    dwBufferLength: DWORD;      { length of data buffer }
+    dwBytesRecorded: DWORD;     { used for input only }
+    dwUser: DWORD;              { for client's use }
+    dwFlags: DWORD;             { assorted flags (see defines) }
+    dwLoops: DWORD;             { loop control counter }
+    lpNext: PWaveHdr;           { reserved for driver }
+    reserved: DWORD;            { reserved for driver }
+  end;
+  TWaveHdr = wavehdr_tag;
+  {$EXTERNALSYM WAVEHDR}
+  WAVEHDR = wavehdr_tag;
+
+  PWaveFormat = ^TWaveFormat;
+  TWaveFormat = record
+    wFormatTag: Word;         { format type }
+    nChannels: Word;          { number of channels (i.e. mono, stereo, etc.) }
+    nSamplesPerSec: DWord;  { sample rate }
+    nAvgBytesPerSec: DWord; { for buffer estimation }
+    nBlockAlign: Word;      { block size of data }
+  end;
+
+  TPCMWaveFormat = record
+    wf: TWaveFormat;
+    wBitsPerSample: Word;
+  end;
+  PPCMWaveFormat = ^TPCMWaveFormat;
+
+  TMixWave = record
+	  pcm: TPCMWAVEFORMAT;
+	  wh: TWAVEHDR;
+    szWaveFilename: array [0..MAXFILENAME] of char;
+  end;
+  PMixWave = ^TMixWave;
+
 var
   KeyForm: TKeyForm;
-  WaveMix: TWaveMix;
-  WaveFileKeyDown, WaveFileKeyUp: PMixWave;
   DownSounds: array of PMixWave;
   UpSounds: array of PMixWave;
 
@@ -36,16 +73,18 @@ implementation
 function SetKeyHook: Longint; stdcall; external 'Key.dll';
 function DelKeyHook: Longint; stdcall; external 'Key.dll';
 
+procedure InitWaveOut; cdecl; external 'waveout.dll';
+procedure DestroyWaveOut; cdecl; external 'waveout.dll';
+procedure PlayWave(Sound: PMixWave); cdecl; external 'waveout.dll';
+function LoadWave(FileName: String): PMixWave; cdecl; external 'waveout.dll';
+
 {$R *.dfm}
 
-var i: integer = 0;
 var DirList: TStrings;
 
 procedure TKeyForm.FormCreate(Sender: TObject);
 begin
-  WaveMix := TWaveMix.Create();
-  WaveMix.Channels := $FF;
-  WaveMix.Activated := true;
+  InitWaveOut;
   DirList := ScanDir;
   Listbox1.Items := KeyForm.GetSetNames(DirList);
   KeyForm.LoadSounds(DirList.Strings[0]);
@@ -55,25 +94,24 @@ end;
 procedure TKeyForm.FormDestroy(Sender: TObject);
 begin
   DelKeyHook;
-  WaveMix.Activated := false;
-  WaveMix.Destroy();
+  DestroyWaveOut;
 end;
 
 procedure TKeyForm.KeyEventHandler(var Msg: TMessage);
 var KeyState: integer;
+    Sound: PMixWave;
 begin
-  inc(i);
   KeyState := Msg.LParam shr 30;
   if (KeyState = 0) then
   begin
-    WaveFileKeyDown := DownSounds[Random(Length(DownSounds))];
-    WaveMix.Play(i mod 8, WaveFileKeyDown, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+    Sound := DownSounds[Random(Length(DownSounds))];
+    PlayWave(Sound);
   end;
 
   if (KeyState = 3) then
   begin
-    WaveFileKeyUp := UpSounds[Random(Length(UpSounds))];
-    WaveMix.Play(i mod 8, WaveFileKeyUp, nil, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+    Sound := UpSounds[Random(Length(UpSounds))];
+    PlayWave(Sound);
   end;
 end;
 
@@ -117,7 +155,9 @@ procedure TKeyForm.LoadSounds(folder: string);
 var ini: TIniFile;
   list: TStrings;
   i: integer;
+  s: PMixWave;
 begin
+  GetMem(s, sizeof(TMixWave));
   list := TStringList.Create;
   ini := TInifile.Create('.\sound\' + folder + '\config.ini');
   ini.ReadSection('down', list);
@@ -126,7 +166,7 @@ begin
     SetLength(DownSounds, list.count);
     for i := 0 to list.Count - 1 do
     begin
-      DownSounds[i] := WaveMix.OpenFromFile('.\sound\' + folder + '\' + ini.ReadString('down', list[i], ''));
+      DownSounds[i] := LoadWave('.\sound\' + folder + '\' + ini.ReadString('down', list[i], ''));
     end;
   end;
 
@@ -136,7 +176,7 @@ begin
     SetLength(UpSounds, list.count);
     for i := 0 to list.Count - 1 do
     begin
-      UpSounds[i] := WaveMix.OpenFromFile('.\sound\' + folder + '\' + ini.ReadString('up', list[i], ''));
+      UpSounds[i] := LoadWave('.\sound\' + folder + '\' + ini.ReadString('up', list[i], ''));
     end;
   end;
 end;

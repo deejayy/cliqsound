@@ -1,12 +1,9 @@
 library Key;
 
-uses
-  WinTypes,
-  WinProcs,
-  Messages;
+uses WinTypes;
 
 const
-  KeyEvent = WM_USER + 1;
+  KeyEvent = $401;
 
 var
   HookHandle   : hHook;
