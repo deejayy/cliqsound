@@ -16,8 +16,8 @@ begin
     hMixSession := FHandle;
   end;
 
-  WaveMixActivate(FHandle, true);
-  WaveMixOpenChannel(FHandle, 0, WMIX_ALL);
+  WaveMixOn(FHandle);
+  WaveMixOpenAllChannel(FHandle);
 end;
 
 function LoadWave(FileName: string): PMixWave;
@@ -37,7 +37,6 @@ end;
 
 procedure DestroyWaveOut;
 begin
-  WaveMixActivate(FHandle, false);
   WaveMixCloseSession(FHandle);
 end;
 

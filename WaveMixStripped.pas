@@ -26,7 +26,7 @@ const
 type
   EWaveMixError = class (Exception);
 
-   {$A-}
+  {$A-}
   PWaveFormat = ^TWaveFormat;
   TWaveFormat = record
     wFormatTag: Word;         { format type }
@@ -75,8 +75,9 @@ type
 function WaveMixInit: THandle;
 function WaveMixConfigureInit(lpConfig: PMIXCONFIG): THandle;
 procedure WaveMixCloseSession(hMixSession: THandle);
-procedure WaveMixActivate(hMixSession: THandle; fActivate: Boolean);
-procedure WaveMixOpenChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
+procedure WaveMixOn(hMixSession: THandle);
+procedure WaveMixOff(hMixSession: THandle);
+procedure WaveMixOpenAllChannel(hMixSession: THandle);
 procedure WaveMixCloseChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
 function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar; hInst: THandle; dwFlags: DWord): PMixWave;
 procedure WaveMixFreeWave(hMixSession: THandle; lpMixWave: PMIXWAVE);
@@ -191,38 +192,14 @@ function MixerPlay(lpXWH: PXWAVEHDR; fWriteBlocks: Boolean): Boolean;
 function MyWaveOutGetPosition(hWaveOut: HWAVEOUT; fGoodGetPos: Boolean): DWord;
 procedure MyWaveOutReset(hWaveOut: HWAVEOUT);
 
-
 implementation
 
 var
-  gfShow: Boolean = TRUE;
-  giDebug: Integer;
-   //int giNumWaveBlocks=3;   // number of ping pong wave buffers
   gaWaveBlock: array [0..MAXWAVEBLOCKS - 1] of PXWAVEHDR;
-  gPlayQueue: PLAYQUEUE;
+  gPlayQueue:  PLAYQUEUE;
   gaChannelNodes: array [0..MAXQUEUEDWAVES - 1] of CHANNELNODE;
   gpFreeChannelNodes: PCHANNELNODE;
-  gsz: string;
   g, gActiveSession: PGLOBALS;
-  gfCount: Boolean;
-
-
-function mmioFOURCC(ch0, ch1, ch2, ch3: Char): DWord;
-begin
-  Result := Ord(ch0) + (Ord(ch1) shl 8) + (Ord(ch2) shl 16) + (Ord(ch3) shl 24);
-end;
-
-function SessionToGlobalDataPtr(hMixSession: THandle): PGLOBALS;
-var
-  pG: PGLOBALS;
-begin
-  pG := PGLOBALS(hMixSession);
-
-  if ((pG = nil) or (pG^.wMagic1 <> MAGICNO) or (pG^.wMagic2 <> MAGICNO)) then
-  begin raise EWaveMixError.Create('Invalid Session handle') end;
-
-  Result := pG;
-end;
 
 function MyWaveOutGetPosition(hWaveOut: HWAVEOUT; fGoodGetPos: Boolean): DWord;
 var
@@ -572,105 +549,56 @@ begin
   end;
 end;
 
-procedure WaveMixActivate(hMixSession: THandle; fActivate: Boolean);
+procedure WaveMixOn(hMixSession: THandle);
 begin
-  SessionToGlobalDataPtr(hMixSession);
-
-  if (fActivate = True) then
+  if (gActiveSession <> nil) then
   begin
-    // Bugfix for Utopia:  don't allow the wave device to be removed from an application
-    // that has already allocated it.  Instead return an Error.  This will permit the
-    // application to release it when it is ready to. (what happens if an APP hangs while
-    // it has the device allocated? Should probably reboot at that point anyway)
-    //
-    if (gActiveSession <> nil) then
-    begin
-      // the wavemixer has already beeen allocated to a device,
-      // stealing it asynchrounously is dangerous and can cause
-      // GP Faults.
-      if (g <> gActiveSession) then
-      begin raise EWaveMixError.Create('Resource is already allocated to a ' +
-          'process') end
-      else
-      begin exit end;
-    end;
-    gActiveSession := g;
-
-    // Maximize our chances of getting device by killing any current system sounds
-    // e.g. SoundBits
-    sndPlaySound(nil, SND_SYNC);
-
-    GetWaveDevice;
-
-    g^.fActive := TRUE;
-    SetWaveOutPosition(g^.dwCurrentSample);
-    while (MixerPlay(GetWaveBlock, True) = True) do
-    begin end;
-  end
-  else
-  begin
-    if (g^.fActive = True) then
-    begin g^.dwCurrentSample := MyWaveOutGetPosition(g^.hWaveOut, g^.fGoodGetPos) end;
-    ReleaseWaveDevice(g);
-    g^.fActive := FALSE;
-    if (g = gActiveSession) then
-    begin gActiveSession := nil end;
+    if (g <> gActiveSession) then
+    begin raise EWaveMixError.Create('Resource is already allocated to a ' +
+        'process') end
+    else
+    begin exit end;
   end;
+  gActiveSession := g;
+
+  sndPlaySound(nil, SND_SYNC);
+
+  GetWaveDevice;
+
+  g^.fActive := TRUE;
+  SetWaveOutPosition(g^.dwCurrentSample);
+  while (MixerPlay(GetWaveBlock, True) = True) do
+  begin end;
 end;
 
-procedure WaveMixOpenChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
+procedure WaveMixOff(hMixSession: THandle);
 begin
-  g := SessionToGlobalDataPtr(hMixSession);
+  if (g^.fActive = True) then
+  begin g^.dwCurrentSample := MyWaveOutGetPosition(g^.hWaveOut, g^.fGoodGetPos) end;
+  ReleaseWaveDevice(g);
+  g^.fActive := FALSE;
+  if (g = gActiveSession) then
+  begin gActiveSession := nil end;
+end;
 
-  if (dwFlags > WMIX_OPENCOUNT) then
-  begin raise EWaveMixError.Create('Invalid Flags') end;
+procedure WaveMixOpenAllChannel(hMixSession: THandle);
+var iChannel: Integer;
+begin
+  g := PGLOBALS(hMixSession);
 
-  if ((dwFlags = WMIX_OPENSINGLE) and (iChannel >= MAXCHANNELS)) then
-  begin raise EWaveMixError.Create('Invalid channel number') end;
-
-  if ((dwFlags = WMIX_OPENCOUNT) and ((iChannel > MAXCHANNELS) or (iChannel < 1))) then
-  begin raise EWaveMixError.Create('Invalid number of channels') end;
-
-  case dwFlags of
-    WMIX_OPENSINGLE:
+  begin
+    iChannel := MAXCHANNELS;
+    while (iChannel > 0) do
     begin
-      if (g^.aChannel[iChannel] <> PCHANNELNODE(-1)) then
-      begin raise EWaveMixError.Create('The channel has already been opened') end;
-
-      g^.aChannel[iChannel] := nil;
-      Inc(g^.iChannels);
-    end;
-
-    WMIX_OPENALL:
-    begin
-      iChannel := MAXCHANNELS;
-      while (iChannel > 0) do
+      Dec(iChannel);
+      if (g^.aChannel[iChannel] = PCHANNELNODE(-1)) then
       begin
-        Dec(iChannel);
-        if (g^.aChannel[iChannel] = PCHANNELNODE(-1)) then
-        begin
-          g^.aChannel[iChannel] := nil;
-          Inc(g^.iChannels);
-        end;
+        g^.aChannel[iChannel] := nil;
+        Inc(g^.iChannels);
       end;
     end;
-
-    WMIX_OPENCOUNT:
-    begin
-      while (iChannel > 0) do
-      begin
-        Dec(iChannel);
-        if (g^.aChannel[iChannel] = PCHANNELNODE(-1)) then
-        begin
-          g^.aChannel[iChannel] := nil;
-          Inc(g^.iChannels);
-        end;
-      end;
-    end;
-
-  else
-  begin raise EWaveMixError.Create('Invalid flag') end;
   end;
+
 end;
 
 function AddToPlayingQueue(lpXWH: PXWAVEHDR): PXWAVEHDR;
@@ -910,10 +838,6 @@ var
   lpXWH: PXWAVEHDR;
 
 begin
-  // to fix bug where WaveMixPump GPFaults because app called WaveMixPump before
-  // it called WaveMixActivate, or called WaveMixPump after WaveMixInit failed.
-  // Second part of bugfix in WaveMixActivate()
-  // (Actual hang is in FreePlayedBlocks)
   g := gActiveSession;
   if (g = nil) then
   begin exit end;
@@ -949,41 +873,12 @@ begin
       if (PXWAVEHDR(lParam)^.g <> gActiveSession) then
       begin g := gActiveSession end;
 
-            // mark the block as usable again and mix the next batch */
       WaveMixPump;
       Result := 0;
     end;
   else
   begin Result := DefWindowProc(hWnd, msg, wParam, lParam) end;
   end;
-end;
-
-{*
-  this code will "Remix" the wave output without doing a waveOutReset.  This is necessary
-  for systems in which the waveOutReset cause hardware clicks or mute circutry or whatever.
-  The SLIMY version of this code remixes the sounds directly into the buffers that have
-  already been submitted to waveOutWrite.  This is faster than just mixing when the next block
-  becomes available, but it does not work so well because many sound cards suck the submitted
-  data into a DMA buffer and so modifying the data in those buffers has no effect.  The NOSLIMY
-  version works well when the waveblocks are short (eg. ~512-600 bytes) and there are few of them
-  (eg <=3 blks) Doing this will cause blocks to be mixed and submitted often and so response time
-  is good.
-*}
-procedure NoResetRemix(dwRemixSamplePos: DWord; pCD: PCHANNELNODE);
-var
-  dwOffset: DWord;
-
-begin
-  if (pCD <> nil) then // */
-  begin
-    dwOffset := g^.dwCurrentSample - pCD^.dwStartPos;
-    pCD^.dwStartPos := pCD^.dwStartPos + dwOffset;
-    pCD^.dwEndPos := pCD^.dwEndPos + dwOffset;
-    if (pCD^.dwStartPos > pCD^.dwEndPos) then  // if we wrapped the end beyond last possible position, fix it!
-    begin pCD^.dwEndPos := $7FFFFFFF end;
-  end;
-
-  WaveMixPump;
 end;
 
 procedure ResetRemix(dwRemixSamplePos: DWord; pCD: PCHANNELNODE);
@@ -1081,14 +976,10 @@ begin
   if (lpMixPlayParams = nil) then
   begin raise EWaveMixError.Create('nil parameters pointer passed to WaveMixPlay') end;
 
-  g := SessionToGlobalDataPtr(lpMixPlayParams^.hMixSession);
+  g := PGLOBALS(lpMixPlayParams^.hMixSession);
 
   if (lpMixPlayParams^.lpMixWave = nil) then
   begin raise EWaveMixError.Create('nil wave pointer passed to WaveMixPlay!') end;
-
-  if (g^.fActive = False) then
-  begin raise EWaveMixError.Create('Wave device not allocated, call '
-      + 'WaveMixActivate(hMixSession,TRUE)') end;
 
   if (g^.iChannels = 0) then
   begin raise EWaveMixError.Create('You must open a channel before you can play '
@@ -1254,7 +1145,7 @@ var
 begin
   fRemix := False;
 
-  g := SessionToGlobalDataPtr(hMixSession);
+  g := PGLOBALS(hMixSession);
 
   if ((dwFlags and WMIX_ALL) <> 0) then
   begin
@@ -1299,7 +1190,7 @@ procedure WaveMixCloseChannel(hMixSession: THandle; iChannel: Integer; dwFlags: 
 var
   iLast: Integer;
 begin
-  g := SessionToGlobalDataPtr(hMixSession);
+  g := PGLOBALS(hMixSession);
 
   {* flush the channel and let WaveMixFlushChannel do all the
   ** error checking for us
@@ -1331,7 +1222,7 @@ var
   pCD, pPrev: PCHANNELNODE;
   g: PGLOBALS;
 begin
-  g := SessionToGlobalDataPtr(hMixSession);
+  g := PGLOBALS(hMixSession);
 
   if (lpMixWave = nil) then
   begin raise EWaveMixError.Create('The given pointer was not valid') end;
@@ -1777,7 +1668,7 @@ begin
   hdmmio := 0;
   lpData := nil;
 
-  g := SessionToGlobalDataPtr(hMixSession);
+  g := PGLOBALS(hMixSession);
   if (g <> nil) then
   begin
     wDeviceID := g^.wDeviceID
@@ -1790,13 +1681,13 @@ begin
   waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY);
   lpMix := PMIXWAVE(GlobalAllocPtr(GMEM_FIXED or GMEM_ZEROINIT or GMEM_NODISCARD, sizeof(TMIXWAVE)));
   hdmmio := mmioOpen(szWaveFilename, nil, MMIO_READ or MMIO_ALLOCBUF);
-  mmckinfoParent.fccType := mmioFOURCC('W', 'A', 'V', 'E');
-  mmckinfoSubchunk.ckid := mmioFOURCC('f', 'm', 't', ' ');
+  mmckinfoParent.fccType := 1163280727; // 'W', 'A', 'V', 'E'
+  mmckinfoSubchunk.ckid := 544501094; // 'f', 'm', 't', ' '
   mmioDescend(hdmmio, PMMCKINFO(@mmckinfoParent), nil, MMIO_FINDRIFF);
   mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK);
   mmioRead(hdmmio, PChar(@(lpMix^.pcm)), sizeof(TPCMWAVEFORMAT));
   mmioAscend(hdmmio, @mmckinfoSubchunk, 0);
-  mmckinfoSubchunk.ckid := mmioFOURCC('d', 'a', 't', 'a');
+  mmckinfoSubchunk.ckid := 1635017060; // 'd', 'a', 't', 'a'
   mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK);
   dwDataSize := mmckinfoSubchunk.cksize;
   lpData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE or GMEM_NODISCARD, dwDataSize);
@@ -1858,22 +1749,12 @@ var
 begin
   InitLibrary;
 
-   // checks for previous initialization
-  if (g <> nil) then
-  begin raise EWaveMixError.Create('Session already initialized') end;
-
-  // if a size is passed in which we don't understand, then don't use the passed in info
-  // it may have been created with another version
   if ((lpConfig <> nil) and (lpConfig^.wSize <> sizeof(TMIXCONFIG))) then
   begin lpConfig := nil end;
 
   iDevices := waveOutGetNumDevs;
-  if (iDevices = 0) then
-  begin raise EWaveMixError.Create('No wave output devices available') end;
 
   g := PGLOBALS(LocalAlloc(LPTR, sizeof(GLOBALS)));
-  if (g = nil) then
-  begin raise EWaveMixError.Create(gszMemError) end;
 
   g^.wMagic1 := MAGICNO;
   g^.wMagic2 := MAGICNO;
@@ -1883,20 +1764,15 @@ begin
 
   Move(gpFormat, g^.pcm, sizeof(TPCMWAVEFORMAT));  // default wave format */
 
-  iDefRemix := GetPrivateProfileInt(Pointer(gszDefault), 'Remix', DEFAULT_REMIXALGORITHM, gszIniFile);
-  iDefGoodWavePos := GetPrivateProfileInt(Pointer(gszDefault), 'GoodWavePos', DEFAULT_GOODWAVPOS, gszIniFile);
-  iDefWaveBlocks := GetPrivateProfileInt(Pointer(gszDefault), 'WaveBlocks', DEFAULT_WAVEBLOCKS, gszIniFile);
-  iDefWaveBlockLen := GetPrivateProfileInt(Pointer(gszDefault), 'WaveBlockLen', DEFAULT_WAVEBLOCKLEN, gszIniFile) and $FFFC; // force DWord align
-  iDefSamplesPerSec := GetPrivateProfileInt(Pointer(gszDefault), 'SamplesPerSec', DEFAULT_SAMPLESPERSEC, gszIniFile);
-
+  iDefRemix := DEFAULT_REMIXALGORITHM;
+  iDefGoodWavePos := DEFAULT_GOODWAVPOS;
+  iDefWaveBlocks := DEFAULT_WAVEBLOCKS;
+  iDefWaveBlockLen := DEFAULT_WAVEBLOCKLEN and $FFFC;
+  iDefSamplesPerSec := DEFAULT_SAMPLESPERSEC;
 
   StrCopy(g^.szDevicePName, Pointer(gszDefault));
-  g^.wDeviceID := DWord(GetPrivateProfileInt('general', 'WaveOutDevice', WAVE_MAPPER, gszIniFile));
-  if (g^.wDeviceID >= DWord(iDevices)) then // make sure we don't use an invalid ID number
-  begin g^.wDeviceID := DWord(WAVE_MAPPER) end;
+  g^.wDeviceID := DWord(WAVE_MAPPER);
 
-  // BUGBUG: sometimes this function returns an error even if there is a device installed
-  //         so just act as if I don't know what card it is and don't worry about it.
   u := waveOutGetDevCaps(g^.wDeviceID, @caps, sizeof(TWAVEOUTCAPS));
   if (u <> 0) then
   begin StrCopy(caps.szPname, 'Unknown Device') end;
@@ -1905,25 +1781,11 @@ begin
   begin
     LocalFree(HLOCAL(g));
     g := nil;
-    raise EWaveMixError.Create(caps.szPname + ' is a syncronous (blocking) '
-      + 'wave output device.  This will not permit audio to play while other '
-      + 'applications are running');
-  end;
-
-  if (GetPrivateProfileInt('not compatible', caps.szPname, 0, gszIniFile) <> 0) then
-  begin
-    LocalFree(HLOCAL(g));
-    g := nil;
-    raise EWaveMixError.Create(caps.szPname + ' is not compatible with '
-      + 'the realtime wavemixer');
   end;
 
   StrCopy(g^.szDevicePName, caps.szPname);
 
-  if (GetPrivateProfileInt(g^.szDevicePName, 'Remix', iDefRemix, gszIniFile) = 2) then
-  begin g^.pfnRemix := NoResetRemix end
-  else
-  begin g^.pfnRemix := ResetRemix end;
+  g^.pfnRemix := ResetRemix;
 
   g^.fGoodGetPos := Boolean(GetPrivateProfileInt(g^.szDevicePName, 'GoodWavePos', iDefGoodWavePos, gszIniFile));
   g^.iNumWaveBlocks := GetPrivateProfileInt(g^.szDevicePName, 'WaveBlocks', iDefWaveBlocks, gszIniFile);
@@ -1986,31 +1848,20 @@ var
 begin
   FillChar(config, sizeof(TMIXCONFIG), 0);
   config.wSize := sizeof(TMIXCONFIG);
-
   Result := WaveMixConfigureInit(@config);
 end;
 
 procedure WaveMixCloseSession(hMixSession: THandle);
 begin
-  g := SessionToGlobalDataPtr(hMixSession);
-
-  WaveMixActivate(hMixSession, FALSE);
+  WaveMixOff(hMixSession);
   WaveMixCloseChannel(hMixSession, 0, WMIX_ALL);
-
-  // null out all the data so we can catch references to it after we have freed it */
-  FillChar(g^, sizeof(GLOBALS), 0);
-  g := nil;
-
   LocalFree(HLOCAL(hMixSession));
 end;
 
-procedure InitLibrary;
+procedure CreateCallbackWindowClass;
 var
   wc: TWNDCLASS;
-  rt: Integer;
 begin
-  giDebug := GetPrivateProfileInt('general', 'debug', 0, gszIniFile);
-
   wc.hCursor := LoadCursor(0, IDC_ARROW);
   wc.hIcon := 0;
   wc.lpszMenuName := nil;
@@ -2021,22 +1872,18 @@ begin
   wc.lpfnWndProc := @WndProc;
   wc.cbWndExtra := 0;
   wc.cbClsExtra := 0;
+  RegisterClass(wc);
+end;
 
-  rt := RegisterClass(wc);
-  if ((rt = 0) and (GetLastError <> 1410) and (GetLastError <> 0)) then
-  begin raise EWaveMixError.Create('Error registering class #'
-      + IntToStr(GetLastError)) end;
-
-  InitChannelNodes;  // BUGBUG: need to do this for each session
+procedure InitLibrary;
+begin
+  CreateCallbackWindowClass;
+  InitChannelNodes;
 end;
 
 initialization
-  gfShow := False;
-  giDebug := 0;
   gPlayQueue.first := nil;
   gPlayQueue.last := nil;
-  gsz := 'Thanks Carlos Barbosa for the component, made into a simple class by DeeJayy';  //general purpose buffer for preparing strings
-  gfCount := False;
   g := nil;
 
 end.
