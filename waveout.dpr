@@ -2,30 +2,43 @@ library waveout;
 
 uses WaveMixStripped;
 
-var MyWaveMix: TWaveMix;
-    i: integer;
+var i: integer;
+    FHandle: THandle;
+    FPlayParams: TMixPlayParams;
 
 procedure InitWaveOut;
 begin
-  MyWaveMix := TWaveMix.Create();
-  MyWaveMix.Channels := $FF;
-  MyWaveMix.Activated := true;
-end;
+  FHandle := WaveMixInit;
 
-procedure DestroyWaveOut;
-begin
-  MyWaveMix.Activated := false;
-  MyWaveMix.Destroy();
-end;
+  with FPlayParams do
+  begin
+    Size := sizeof(TMixPlayParams);
+    hMixSession := FHandle;
+  end;
 
-procedure PlayWave(LSound: PMixWave);
-begin
-  MyWaveMix.Play(i mod 8, LSound, WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY, 0);
+  WaveMixActivate(FHandle, true);
+  WaveMixOpenChannel(FHandle, 0, WMIX_ALL);
 end;
 
 function LoadWave(FileName: string): PMixWave;
 begin
-  Result := MyWaveMix.OpenFromFile(FileName);
+  Result := WaveMixOpenWave(FHandle, Pointer(FileName), 0, WMIX_FILE);
+end;
+
+procedure PlayWave(LSound: PMixWave);
+begin
+  FPlayParams.iChannel := i mod 8;
+  FPlayParams.lpMixWave := LSound;
+  FPlayParams.dwFlags := WMIX_USELRUCHANNEL or WMIX_HIGHPRIORITY;
+  FPlayParams.wLoops := 0;
+
+  WaveMixPlay(@FPlayParams);
+end;
+
+procedure DestroyWaveOut;
+begin
+  WaveMixActivate(FHandle, false);
+  WaveMixCloseSession(FHandle);
 end;
 
 exports

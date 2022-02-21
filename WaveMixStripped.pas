@@ -21,7 +21,7 @@ const
   WMIX_HIGHPRIORITY = $0004;    {WMixPlay: remix play buffer immediately}
   WMIX_WAIT = $0008;            {WMixPlay: hold until next 'Play'}
 
-  MAXFILENAME = 15;
+  MAXFILENAME = 255;
 
 type
   EWaveMixError = class (Exception);
@@ -85,10 +85,6 @@ procedure WaveMixPlay(lpMixPlayParams: PMIXPLAYPARAMS);
 
 
 const
-  MAJORVERSION = $02;
-  MINORVERSION = $00;
-  COUNTNODES = 0;
-  DEBUGOUTPUT = 0;
   SILENCE = $80;
   MAXCHANNELS = 16;
   MINWAVEBLOCKS = 2;
@@ -105,9 +101,6 @@ const
   WMIX_CONFIG_CHANNELS = 1;
   WMIX_CONFIG_SAMPLINGRATE = 2;
   _MAX_PATH = 200;
-  NUMHDRS = 512;
-  WAVEBUFSIZE = 16; // if the buffer is bigger than this don't worry about it
-  WF_WINNT = $4000;
   DEFAULT_NTWAVEBLOCKLEN = 2048;
   DEFAULT_REMIXALGORITHM = 1;    // ResetRemix()                */
   DEFAULT_GOODWAVPOS = 0;    // use timeGetTime()           */
@@ -199,53 +192,6 @@ function MyWaveOutGetPosition(hWaveOut: HWAVEOUT; fGoodGetPos: Boolean): DWord;
 procedure MyWaveOutReset(hWaveOut: HWAVEOUT);
 
 
-(*****************************************
-***** TWaveMix Component *****************
-******************************************)
-
-type
-  TWaveMixChannels = Byte;
-
-  TWaveMix = class (TObject)
-  private
-    FPlayParams: TMixPlayParams;
-
-    FHandle: THandle;
-    FActivated: Boolean;
-    FChannels: TWaveMixChannels;
-
-    procedure SetActivated(Value: Boolean);
-    procedure SetChannels(Value: TWaveMixChannels);
-    function GetChannelsPlaying: Byte;
-
-  protected
-    property Handle: THandle read FHandle;
-
-  public
-    property ChannelsPlaying: Byte read GetChannelsPlaying;
-
-    constructor Create();
-    constructor CreateConfigured(Config: TMixConfig);
-    destructor Destroy;
-
-    function OpenFromFile(const FileName: TFileName): PMixWave;
-    function OpenFromResourceByName(const Name: string;
-      Instance: THandle): PMixWave;
-    function OpenFromResourceByID(ID: Integer;
-      Instance: THandle): PMixWave;
-    function OpenFromMemory(Info: PMMIOInfo): PMixWave;
-    procedure Close(Wave: PMixWave);
-    procedure FlushAllChannels(NoRemix: Boolean);
-    procedure FlushChannel(Channel: Integer; NoRemix: Boolean);
-    procedure Play(Channel: Integer; Wave: PMixWave;
-      Flags: Longint; Loops: Word);
-
-  published
-    property Activated: Boolean read FActivated write SetActivated;
-    property Channels: TWaveMixChannels read FChannels write SetChannels;
-  end;
-
-
 implementation
 
 var
@@ -256,7 +202,6 @@ var
   gPlayQueue: PLAYQUEUE;
   gaChannelNodes: array [0..MAXQUEUEDWAVES - 1] of CHANNELNODE;
   gpFreeChannelNodes: PCHANNELNODE;
-  gfCorrectlyInstalled: Boolean;
   gsz: string;
   g, gActiveSession: PGLOBALS;
   gfCount: Boolean;
@@ -266,7 +211,6 @@ function mmioFOURCC(ch0, ch1, ch2, ch3: Char): DWord;
 begin
   Result := Ord(ch0) + (Ord(ch1) shl 8) + (Ord(ch2) shl 16) + (Ord(ch3) shl 24);
 end;
-
 
 function SessionToGlobalDataPtr(hMixSession: THandle): PGLOBALS;
 var
@@ -280,15 +224,7 @@ begin
   Result := pG;
 end;
 
-
 function MyWaveOutGetPosition(hWaveOut: HWAVEOUT; fGoodGetPos: Boolean): DWord;
-// NOTE: this function used to use the code to call waveOutGetPosition or
-//       interplotate from the last known wave done message and time to get
-//       a more accurate wave out get position.
-// overall I found that code to be buggy and error prone and not as effective
-// as just keeping a linear time that never resets.  (although I do reset the
-// g->dwBaseTime when there is no wave data playing to ensure that I will never
-// overflow my time buffer.
 var
   mmt: TMMTIME;
   t1: DWord;
@@ -373,7 +309,6 @@ begin
   waveOutReset(hWaveOut);
   SetWaveOutPosition(dwTmp);
 end;
-
 
 // cmixit: function that actually mixes wave data.  It must be 286 compatible
 procedure cmixit(lpDest: PSAMPLE; rgWaveSrc: array of PSAMPLE; iNumWaves: Integer; wLen: Word);
@@ -463,7 +398,7 @@ begin
   // create the waveform data blocks that we will actually be using to send to the waveform device */
   i := 0;
   repeat
-    gaWaveBlock[i] := PXWAVEHDR(GlobalAllocPtr(GMEM_FIXED + GMEM_SHARE, sizeof(XWAVEHDR) + MAXWAVEBLOCKLEN));
+    gaWaveBlock[i] := PXWAVEHDR(GlobalAllocPtr(GMEM_FIXED or GMEM_SHARE or GMEM_NODISCARD, sizeof(XWAVEHDR) + MAXWAVEBLOCKLEN));
     if (gaWaveBlock[i] = nil) then
     begin
       while (i > 0) do
@@ -530,12 +465,6 @@ end;
 
 // return pointer to the removed node */
 function RemoveFromPlayingQueue(lpXWH: PXWAVEHDR): PXWAVEHDR;
-{
-/* ideally the wave blocks that we pass to the wave driver should be returned
-** in the same order so we could just deal with this like a queue and always just
-** remove the first element.  In practice, however, this isn't the case and so it
-** is necessary to deal with it as a regular linked list.
-}
 var
   lp, lpPrev: PXWAVEHDR;
 begin
@@ -612,20 +541,16 @@ var
 begin
   if (g^.hWaveOut = 0) then
   begin
-    // create an invisible window so that we can handle messages from wavedriver */
     g^.hWndApp := CreateWindow(Pointer(gszAppName), '', WS_DISABLED, 0, 0, 0, 0, 0,
       0, HInstance, nil);
     if (g^.hWndApp = 0) then
     begin raise EWaveMixError.Create('Failed to create callback window') end;
 
-      // Open a waveform output device.
     uErr := waveOutOpen(PHWAVEOUT(@(g^.hWaveOut)), g^.wDeviceID,
       PWAVEFORMATEX(@(g^.pcm)), DWord(g^.hWndApp), DWord(nil),
       CALLBACK_WINDOW);
     if (uErr <> 0) then
     begin
-//          BUGBUG: for some reason a MessageBox here screws up
-//          MessageBox(GetFocus(), "Failed to open waveform output device.",  NULL, MB_OK | MB_ICONEXCLAMATION);
       DestroyWindow(g^.hWndApp);
       g^.hWndApp := 0;
       raise EWaveMixError.Create('Failed to open waveform output device #'
@@ -693,7 +618,6 @@ begin
   end;
 end;
 
-// return same errors as waveOutOpen, waveOutWrite, and waveOutClose */
 procedure WaveMixOpenChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
 begin
   g := SessionToGlobalDataPtr(hMixSession);
@@ -749,7 +673,6 @@ begin
   end;
 end;
 
-// return pointer to head of queue */
 function AddToPlayingQueue(lpXWH: PXWAVEHDR): PXWAVEHDR;
 begin
   // since add to the end of queue this node should not point to any other */
@@ -771,11 +694,6 @@ begin
   Result := gPlayQueue.first;
 end;
 
-
-// This is the main mixing function, it gets called often and so is a good
-// candidate for assembly optimization.  Not sure how much benefit I could get from it.
-
-// return TRUE if a block was submitted for playing */
 function MixerPlay(lpXWH: PXWAVEHDR; fWriteBlocks: Boolean): Boolean;
 var
   i, j, uMaxChannel: DWord;
@@ -953,7 +871,6 @@ begin
   Result := True;
 end;
 
-
 procedure FreePlayedBlocks;
 var
   i: Integer;
@@ -1024,7 +941,6 @@ begin
   begin end;
 end;
 
-
 function WndProc(hWnd: HWND; msg: DWord; wParam: Word; lParam: Longint): Longint; stdcall;
 begin
   case msg of
@@ -1069,7 +985,6 @@ begin
 
   WaveMixPump;
 end;
-
 
 procedure ResetRemix(dwRemixSamplePos: DWord; pCD: PCHANNELNODE);
 var
@@ -1126,7 +1041,6 @@ begin
   waveOutRestart(g^.hWaveOut);
 end;
 
-
 procedure ResetWavePosIfNoChannelData;
 var
   pCD: PCHANNELNODE;
@@ -1151,7 +1065,6 @@ begin
 
   SetWaveOutPosition(0);
 end;
-
 
 procedure WaveMixPlay(lpMixPlayParams: PMIXPLAYPARAMS);
 var
@@ -1333,7 +1246,6 @@ begin
   end;
 end;
 
-
 procedure WaveMixFlushChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
 var
   pCD, pTmp: PCHANNELNODE;
@@ -1383,7 +1295,6 @@ begin
   begin g^.pfnRemix(MyWaveOutGetPosition(g^.hWaveOut, g^.fGoodGetPos), nil) end;
 end;
 
-
 procedure WaveMixCloseChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
 var
   iLast: Integer;
@@ -1413,7 +1324,6 @@ begin
     Inc(iChannel);
   end;
 end;
-
 
 procedure WaveMixFreeWave(hMixSession: THandle; lpMixWave: PMIXWAVE);
 var
@@ -1464,7 +1374,6 @@ begin
   GlobalFreePtr(lpMixWave);
 end;
 
-
 // dwNumSamples should be double if the file is stereo */
 function BitsPerSampleAlign(lpInData: PChar; nInBPS: Word; nOutBPS: Word; dwDataSize: PDWord): PChar;
 var
@@ -1491,7 +1400,7 @@ begin
   dwNumSamples := dwDataSize^ div nInBytesPerSample;
   dwDataSize^ := dwNumSamples * nOutBytesPerSample;
 
-  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE, dwDataSize^);
+  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE or GMEM_NODISCARD, dwDataSize^);
   if (lpOutData = nil) then
   begin
     GlobalFreePtr(lpInData);
@@ -1543,7 +1452,7 @@ begin
   dwNumSamples := dwDataSize^ div nBytesPerSample div nInChannels;
   dwDataSize^ := dwNumSamples * nBytesPerSample * nOutChannels;
 
-  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE, dwDataSize^);
+  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE or GMEM_NODISCARD, dwDataSize^);
   if (lpOutData = nil) then
   begin
     GlobalFreePtr(lpInData);
@@ -1760,7 +1669,7 @@ begin
 
   dwDataSize^ := dwNewNumSamples * SampleSize;
 
-  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE, Longint(dwDataSize^));
+  lpOutData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE or GMEM_NODISCARD, Longint(dwDataSize^));
   if (lpOutData = nil) then
   begin
     GlobalFreePtr(lpInData);
@@ -1815,16 +1724,6 @@ begin
   Result := lpOutSave;
 end;
 
-{* Note: waveFormatConvert and supporting functions were written in C for portability.  They are not very fast
-** if they need to convert all the wave file attributes, but if you are only up/down sampling or something similar
-** they perform ok.  Since games will typically open the wave files and then play the game then it is not such a
-** big deal.  If it does become a big deal then we should looking into using assembly optimized code (e.g. waveconv.asm
-** already exists, but it uses 386 code which is non portable to NT on non-8086 machines.
-** BUGBUG:
-** The conversion allocates a new buffer each time it modifies the data, converts the old buffer to the
-** new buffer and then release the old buffer.  This is somewhat inefficient, and there is the potential for the GlobalAlloc
-** to fail (especially for large buffers).  If you are feeling ambitious, feel free to rewrite them.
-*}
 function WaveFormatConvert(lpOutWF, lpInWF: PPCMWAVEFORMAT; lpInData: PChar; dwDataSize: PDWord): PChar;
 begin
   // if wave formats are the same just return the input buffer */
@@ -1865,189 +1764,53 @@ end;
 
 function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar; hInst: THandle; dwFlags: DWord): PMixWave;
 var
-  mmioInfo: TMMIOINFO;
   mmckinfoParent: TMMCKINFO;
   mmckinfoSubchunk: TMMCKINFO;
   dwDataSize: DWord;
   hWaveOutTmp: HWAVEOUT;
-  hMem: HGLOBAL;
   hdmmio: HMMIO;
-  lpMix: PMIXWAVE;
+  lpMix:  PMIXWAVE;
   lpData: PChar;
   wDeviceID: UInt;
   hdRsrc: HRSRC;
 begin
-  hMem := 0;
   hdmmio := 0;
   lpData := nil;
 
-   // Make sure a waveform output device supports this format.
   g := SessionToGlobalDataPtr(hMixSession);
   if (g <> nil) then
-  begin wDeviceID := g^.wDeviceID end
+  begin
+    wDeviceID := g^.wDeviceID
+  end
   else
-  begin wDeviceID := WAVE_MAPPER end;
-
-  if (waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY) <> 0) then
-  begin raise EWaveMixError.Create('The waveform device can´t play this format') end;
-
-  {* allocate a header for the wave, this will lets us keep the wave information along with the wave
-  ** data, then the calling application has a simpler API to us
-  *}
-  lpMix := PMIXWAVE(GlobalAllocPtr(GMEM_SHARE or GMEM_ZEROINIT, sizeof(TMIXWAVE)));
-  if (lpMix = nil) then
-  begin raise EWaveMixError.Create(gszMemError) end;
-
-  try
-    if ((dwFlags and WMIX_RESOURCE) <> 0) then
-    begin
-      hdRsrc := FindResource(hInst, szWaveFilename, 'WAVE');
-      hMem := LoadResource(hInst, hdRsrc);
-      if (hmem = 0) then
-      begin if (HIWORD(DWord(szWaveFilename)) <> 0) then //  then have a string
-        begin raise EWaveMixError.Create('Failed to open "WAVE" resource '
-            + szWaveFilename) end
-        else
-        begin raise EWaveMixError.Create('Failed to open "WAVE" resource '
-            + IntToStr(LOWORD(DWord(szWaveFilename)))) end end;
-
-      FillChar(mmioInfo, sizeof(TMMIOINFO), 0);
-      mmioInfo.pchBuffer := LockResource(hMem);
-      if (mmioInfo.pchBuffer = nil) then
-      begin
-        FreeResource(hMem);
-        hMem := 0;
-        raise EWaveMixError.Create('Failed to lock "WAVE" resource');
-      end;
-
-      mmioInfo.cchBuffer := SizeofResource(hInst, hdRsrc);
-      mmioInfo.fccIOProc := FOURCC_MEM;
-      mmioInfo.adwInfo[0] := DWord(nil);
-
-      hdmmio := mmioOpen(nil, @mmioInfo, MMIO_READ);
-      if (hdmmio = 0) then
-      begin raise EWaveMixError.Create('Failed to open resource, mmioOpen '
-          + 'error= ' + IntToStr(mmioInfo.wErrorRet)
-          + '.#13May need to make sure resource is marked read-write') end;
-    end
-    else
-    if ((dwFlags and WMIX_MEMORY) <> 0) then
-    begin
-      Move(szWaveFilename^, mmioInfo, sizeof(TMMIOINFO));
-
-      hdmmio := mmioOpen(nil, @mmioInfo, MMIO_READ);
-      if (hdmmio = 0) then
-      begin raise EWaveMixError.Create('Failed to open memory file, mmioOpen '
-          + 'error=' + IntToStr(mmioInfo.wErrorRet)
-          + '.#13May need to make sure memory is read-write') end;
-    end
-    else // Open the given file for reading using buffered I/O. */
-    begin
-      hdmmio := mmioOpen(szWaveFilename, nil, MMIO_READ or MMIO_ALLOCBUF);
-      if (hdmmio = 0) then
-      begin raise EWaveMixError.Create('Failed to open wave file '
-          + szWaveFilename) end;
-    end;
-
-      {* Locate a 'RIFF' chunk with a 'WAVE' form type
-       * to make sure it's a WAVE file.
-       *}
-    mmckinfoParent.fccType := mmioFOURCC('W', 'A', 'V', 'E');
-    if (mmioDescend(hdmmio, PMMCKINFO(@mmckinfoParent), nil, MMIO_FINDRIFF) <> 0) then
-    begin raise EWaveMixError.Create('This is not a WAVE file') end;
-
-      {* Now, find the format chunk (form type 'fmt '). It should be
-       * a subchunk of the 'RIFF' parent chunk.
-       *}
-    mmckinfoSubchunk.ckid := mmioFOURCC('f', 'm', 't', ' ');
-    if (mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK) <> 0) then
-    begin raise EWaveMixError.Create('WAVE file is corrupted') end;
-
-      // Read the format chunk.
-    if (mmioRead(hdmmio, PChar(@(lpMix^.pcm)), sizeof(TPCMWAVEFORMAT)) <> Longint(sizeof(TPCMWAVEFORMAT))) then
-    begin raise EWaveMixError.Create('Failed to read format chunk') end;
-
-      // Make sure it's a PCM file.
-    if (lpMix^.pcm.wf.wFormatTag <> WAVE_FORMAT_PCM) then
-    begin raise EWaveMixError.Create('The file is not a PCM file') end;
-
-      // Ascend out of the format subchunk.
-    mmioAscend(hdmmio, @mmckinfoSubchunk, 0);
-
-      // Find the data subchunk.
-    mmckinfoSubchunk.ckid := mmioFOURCC('d', 'a', 't', 'a');
-    if (mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK) <> 0) then
-    begin raise EWaveMixError.Create('WAVE file has no data chunk') end;
-
-      // Get the size of the data subchunk.
-    dwDataSize := mmckinfoSubchunk.cksize;
-    if (dwDataSize = 0) then
-    begin raise EWaveMixError.Create('The data chunk has no data') end;
-
-      // Allocate and lock memory for the waveform data.
-    lpData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE, dwDataSize);
-    if (lpData = nil) then
-    begin raise EWaveMixError.Create(gszMemError) end;
-
-      // Read the waveform data subchunk.
-    if (mmioRead(hdmmio, PChar(lpData), dwDataSize) <> Longint(dwDataSize)) then
-    begin raise EWaveMixError.Create('Failed to read data chunk') end;
-
-    lpData := WaveFormatConvert(@(g^.pcm), @(lpMix^.pcm), lpData, @dwDataSize);
-    if (lpData = nil) then
-    begin raise EWaveMixError.Create('Failed to convert wave format') end;
-
-      // We're done with the file, close it.
-    mmioClose(hdmmio, 0);
-    if (hMem <> 0) then
-    begin FreeResource(hMem) end;
-
-      // Set up WAVEHDR structure and prepare it to be written to wave device.
-    lpMix^.wh.lpData := lpData;
-    lpMix^.wh.dwBufferLength := dwDataSize;
-    lpMix^.wh.dwFlags := 0;
-    lpMix^.wh.dwLoops := 0;
-    lpMix^.wh.dwUser := 0;
-
-    if (HIWORD(DWord(szWaveFilename)) = 0) then // then name was a resource ID */
-    begin StrPCopy(lpMix^.szWaveFilename, 'res#' + IntToStr(LOWORD(szWaveFilename))) end
-    else
-         // copy the file name, if name too long just copy the last MAXFILENAME characters */
-    begin StrLCopy(lpMix^.szWaveFilename, szWaveFilename, MAXFILENAME) end;
-
-    Result := lpMix;
-
-  except
-    on Exception do
-    begin
-      if (hdmmio <> 0) then
-      begin mmioClose(hdmmio, 0) end;
-      if (lpMix <> nil) then
-      begin GlobalFreePtr(lpMix) end;
-      if (lpData <> nil) then
-      begin GlobalFreePtr(lpData) end;
-      if (hMem <> 0) then
-      begin
-        UnlockResource(hMem);
-        FreeResource(hMem);
-      end;
-      raise;
-    end;
+  begin
+    wDeviceID := WAVE_MAPPER
   end;
+
+  waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY);
+  lpMix := PMIXWAVE(GlobalAllocPtr(GMEM_FIXED or GMEM_ZEROINIT or GMEM_NODISCARD, sizeof(TMIXWAVE)));
+  hdmmio := mmioOpen(szWaveFilename, nil, MMIO_READ or MMIO_ALLOCBUF);
+  mmckinfoParent.fccType := mmioFOURCC('W', 'A', 'V', 'E');
+  mmckinfoSubchunk.ckid := mmioFOURCC('f', 'm', 't', ' ');
+  mmioDescend(hdmmio, PMMCKINFO(@mmckinfoParent), nil, MMIO_FINDRIFF);
+  mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK);
+  mmioRead(hdmmio, PChar(@(lpMix^.pcm)), sizeof(TPCMWAVEFORMAT));
+  mmioAscend(hdmmio, @mmckinfoSubchunk, 0);
+  mmckinfoSubchunk.ckid := mmioFOURCC('d', 'a', 't', 'a');
+  mmioDescend(hdmmio, @mmckinfoSubchunk, @mmckinfoParent, MMIO_FINDCHUNK);
+  dwDataSize := mmckinfoSubchunk.cksize;
+  lpData := GlobalAllocPtr(GMEM_MOVEABLE or GMEM_SHARE or GMEM_NODISCARD, dwDataSize);
+  mmioRead(hdmmio, PChar(lpData), dwDataSize);
+  lpData := WaveFormatConvert(@(g^.pcm), @(lpMix^.pcm), lpData, @dwDataSize);
+  mmioClose(hdmmio, 0);
+  lpMix^.wh.lpData := lpData;
+  lpMix^.wh.dwBufferLength := dwDataSize;
+  lpMix^.wh.dwFlags := 0;
+  lpMix^.wh.dwLoops := 0;
+  lpMix^.wh.dwUser := 0;
+  StrLCopy(lpMix^.szWaveFilename, szWaveFilename, MAXFILENAME);
+  Result := lpMix;
 end;
-
-
-// bugbug: should determine the granularity of wave out get position so that can decide if we want to
-//         use waveOutGetPosition() directly or interpolate with timeGetTime()
-procedure FigureProc(a: HWAVEOUT; msg: Word; b, c, d: DWord);
-begin
-  case msg of
-    WOM_DONE:
-    begin if (gfCount = True) then
-      begin Inc(gfCount) end end;
-  end;
-end;
-
 
 function FigureOutDMABufferSize(iDefBufferSize: Integer; lpWaveFormat: PWAVEFORMAT): DWord;
 var
@@ -2084,7 +1847,6 @@ begin
   *}
   Result := DEFAULT_NTWAVEBLOCKLEN * (lpWaveFormat^.nSamplesPerSec div 11025);
 end;
-
 
 function WaveMixConfigureInit(lpConfig: PMIXCONFIG): THandle;
 var
@@ -2218,7 +1980,6 @@ begin
   Result := THandle(g);
 end;
 
-
 function WaveMixInit: THandle;
 var
   config: TMIXCONFIG;
@@ -2243,45 +2004,11 @@ begin
   LocalFree(HLOCAL(hMixSession));
 end;
 
-
-procedure WaveMixInstalledCorrectly;
-var
-  iLen: Integer;
-  szMyDir: array [0.._MAX_PATH + MAXFILENAME] of char;
-  szSysDir: array [0.._MAX_PATH] of char;
-  psz:  PChar;
-begin
-  // get the current full path
-  iLen := GetModuleFileName(HInstance, szMyDir, _MAX_PATH);
-  if (iLen = 0) then
-  begin raise EWaveMixError.Create('GetModuleFileName error #'
-      + IntToStr(GetLastError)) end;
-
-  // get rid of the file name
-  psz := szMyDir + iLen;
-  while (psz^ <> '\') do
-  begin Dec(psz) end;
-
-  psz^ := chr(0);
-
-  StrUpper(szMyDir);
-
-  // get the system directory
-  // don't bother checking path, because will fail when I do cmp anyway
-  GetSystemDirectory(szSysDir, _MAX_PATH);
-  StrUpper(szSysDir);
-end;
-
-
 procedure InitLibrary;
 var
   wc: TWNDCLASS;
   rt: Integer;
 begin
-  WaveMixInstalledCorrectly;
-
-  gfCorrectlyInstalled := TRUE;
-
   giDebug := GetPrivateProfileInt('general', 'debug', 0, gszIniFile);
 
   wc.hCursor := LoadCursor(0, IDC_ARROW);
@@ -2303,181 +2030,11 @@ begin
   InitChannelNodes;  // BUGBUG: need to do this for each session
 end;
 
-
-(**********************************
-          TWaveMix
-*********************************)
-
-constructor TWaveMix.Create();
-begin
-  inherited Create();
-
-   // if parameter nil use WaveMixInit otherwise use WaveMixConfigureInit
-  FHandle := WaveMixInit;
-
-  if (FHandle = 0) then
-  begin raise EWaveMixError.Create('Initialization failed (WaveMixInit)') end;
-
-  with FPlayParams do
-  begin
-    Size := sizeof(TMixPlayParams);
-    hMixSession := FHandle;
-  end;
-end;
-
-
-constructor TWaveMix.CreateConfigured(Config: TMixConfig);
-begin
-  FHandle := WaveMixConfigureInit(@Config);
-
-  if (FHandle = 0) then
-  begin raise EWaveMixError.Create('Initialization failed'
-      + '(WaveMixConfigureInit)') end;
-
-  with FPlayParams do
-  begin
-    Size := sizeof(TMixPlayParams);
-    hMixSession := FHandle;
-  end;
-end;
-
-
-destructor TWaveMix.Destroy;
-begin
-  Channels := 0;
-  Activated := False;
-
-  if (FHandle <> 0) then
-  begin WaveMixCloseSession(FHandle) end;
-
-  inherited Destroy;
-end;
-
-
-procedure TWaveMix.SetActivated(Value: Boolean);
-begin
-  if (Value = FActivated) then
-  begin Exit end;
-
-  WaveMixActivate(FHandle, Value);
-
-  FActivated := Value;
-end;
-
-
-procedure TWaveMix.SetChannels(Value: TWaveMixChannels);
-var
-  Cnt, vt: Integer;
-begin
-  if (Value = FChannels) then
-  begin exit end;
-
-  vt := Value;
-
-   // opens all channels
-  if (Value = $FF) then
-  begin WaveMixOpenChannel(FHandle, 0, WMIX_ALL) end
-  else
-      // closes all channels
-  if (Value = 0) then
-  begin WaveMixCloseChannel(FHandle, 0, WMIX_ALL) end
-  else
-         // or open/close each channel individually
-  begin for Cnt := 0 to 7 do
-    begin
-      if (((vt xor FChannels) and 1) = 1) then
-      begin if (vt and 1 = 1) then
-        begin WaveMixOpenChannel(FHandle, Cnt, WMIX_OPENSINGLE) end
-        else
-        begin WaveMixCloseChannel(FHandle, Cnt, 0) end end;
-
-      vt := vt shr 1;
-      FChannels := FChannels shr 1;
-    end end;
-
-  FChannels := Value;
-end;
-
-
-function TWaveMix.GetChannelsPlaying: Byte;
-var
-  Cnt: Longint;
-begin
-  Result := 0;
-  for Cnt := 0 to 7 do
-  begin if (g^.aChannel[Cnt] <> nil) and (g^.aChannel[Cnt] <> PCHANNELNODE(-1)) then
-    begin Result := Result or (1 shl Cnt) end end;
-end;
-
-
-function TWaveMix.OpenFromFile(const FileName: TFileName): PMixWave;
-begin
-  Result := WaveMixOpenWave(FHandle, Pointer(FileName), 0, WMIX_FILE);
-end;
-
-
-function TWaveMix.OpenFromResourceByName(const Name: string;
-  Instance: THandle): PMixWave;
-begin
-  Result := WaveMixOpenWave(FHandle, Pointer(Name), Instance, WMIX_RESOURCE);
-end;
-
-
-function TWaveMix.OpenFromResourceByID(ID: Integer;
-  Instance: THandle): PMixWave;
-begin
-  Result := WaveMixOpenWave(FHandle, Pointer(ID and $FFFF), Instance, WMIX_RESOURCE);
-end;
-
-
-function TWaveMix.OpenFromMemory(Info: PMMIOInfo): PMixWave;
-begin
-  Result := WaveMixOpenWave(FHandle, Pointer(Info), 0, WMIX_MEMORY);
-end;
-
-
-procedure TWaveMix.Close(Wave: PMixWave);
-begin
-  WaveMixFreeWave(FHandle, Wave);
-end;
-
-
-procedure TWaveMix.FlushAllChannels(NoRemix: Boolean);
-begin
-  if (NoRemix = True) then
-  begin WaveMixFlushChannel(FHandle, 0, WMIX_ALL + WMIX_NOREMIX) end
-  else
-  begin WaveMixFlushChannel(FHandle, 0, WMIX_ALL) end;
-end;
-
-
-procedure TWaveMix.FlushChannel(Channel: Integer; NoRemix: Boolean);
-begin
-  if (NoRemix = True) then
-  begin WaveMixFlushChannel(FHandle, Channel, WMIX_NOREMIX) end
-  else
-  begin WaveMixFlushChannel(FHandle, Channel, 0) end;
-end;
-
-
-procedure TWaveMix.Play(Channel: Integer; Wave: PMixWave;
-  Flags: Longint; Loops: Word);
-begin
-  FPlayParams.iChannel := Channel;
-  FPlayParams.lpMixWave := Wave;
-  FPlayParams.dwFlags := Flags;
-  FPlayParams.wLoops := Loops;
-
-  WaveMixPlay(@FPlayParams);
-end;
-
-
 initialization
   gfShow := False;
   giDebug := 0;
   gPlayQueue.first := nil;
   gPlayQueue.last := nil;
-  gfCorrectlyInstalled := True;
   gsz := 'Thanks Carlos Barbosa for the component, made into a simple class by DeeJayy';  //general purpose buffer for preparing strings
   gfCount := False;
   g := nil;
