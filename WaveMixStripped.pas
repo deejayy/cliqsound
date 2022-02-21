@@ -72,14 +72,13 @@ type
 
 
    // function prototypes
-function WaveMixInit: THandle;
-function WaveMixConfigureInit(lpConfig: PMIXCONFIG): THandle;
+function WaveMixConfigureInit: THandle;
 procedure WaveMixCloseSession(hMixSession: THandle);
 procedure WaveMixOn(hMixSession: THandle);
 procedure WaveMixOff(hMixSession: THandle);
 procedure WaveMixOpenAllChannel(hMixSession: THandle);
 procedure WaveMixCloseChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
-function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar; hInst: THandle; dwFlags: DWord): PMixWave;
+function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar): PMixWave;
 procedure WaveMixFreeWave(hMixSession: THandle; lpMixWave: PMIXWAVE);
 procedure WaveMixFlushChannel(hMixSession: THandle; iChannel: Integer; dwFlags: DWord);
 procedure WaveMixPlay(lpMixPlayParams: PMIXPLAYPARAMS);
@@ -114,14 +113,6 @@ const
   gszMemError: string = 'Unable to allocate memory for waveform data.  ' +
     'Try making more memory available by closing other applications.';
   gszIniFile: array [0..12] of char = 'WAVEMIX.INI';
-
-  gpFormat: TPCMWAVEFORMAT = (wf:
-    (wFormatTag: WAVE_FORMAT_PCM;
-    nChannels: MONO;
-    nSamplesPerSec: SAMPLESPERSEC;
-    nAvgBytesPerSec: SAMPLESPERSEC * BYTESPERSAMPLE * MONO;
-    nBlockAlign: BYTESPERSAMPLE);
-    wBitsPerSample: BITSPERSAMPLE);
 
 type
   PSAMPLE = PCHAR;
@@ -1653,7 +1644,7 @@ begin
   Result := lpInData;
 end;
 
-function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar; hInst: THandle; dwFlags: DWord): PMixWave;
+function WaveMixOpenWave(hMixSession: THandle; szWaveFilename: PChar): PMixWave;
 var
   mmckinfoParent: TMMCKINFO;
   mmckinfoSubchunk: TMMCKINFO;
@@ -1662,23 +1653,12 @@ var
   hdmmio: HMMIO;
   lpMix:  PMIXWAVE;
   lpData: PChar;
-  wDeviceID: UInt;
   hdRsrc: HRSRC;
 begin
   hdmmio := 0;
   lpData := nil;
-
   g := PGLOBALS(hMixSession);
-  if (g <> nil) then
-  begin
-    wDeviceID := g^.wDeviceID
-  end
-  else
-  begin
-    wDeviceID := WAVE_MAPPER
-  end;
-
-  waveOutOpen(@hWaveOutTmp, wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY);
+  waveOutOpen(@hWaveOutTmp, g^.wDeviceID, PWAVEFORMATEX(@(g^.pcm)), DWord(nil), 0, WAVE_FORMAT_QUERY);
   lpMix := PMIXWAVE(GlobalAllocPtr(GMEM_FIXED or GMEM_ZEROINIT or GMEM_NODISCARD, sizeof(TMIXWAVE)));
   hdmmio := mmioOpen(szWaveFilename, nil, MMIO_READ or MMIO_ALLOCBUF);
   mmckinfoParent.fccType := 1163280727; // 'W', 'A', 'V', 'E'
@@ -1699,156 +1679,35 @@ begin
   lpMix^.wh.dwFlags := 0;
   lpMix^.wh.dwLoops := 0;
   lpMix^.wh.dwUser := 0;
-  StrLCopy(lpMix^.szWaveFilename, szWaveFilename, MAXFILENAME);
   Result := lpMix;
 end;
 
-function FigureOutDMABufferSize(iDefBufferSize: Integer; lpWaveFormat: PWAVEFORMAT): DWord;
+function WaveMixConfigureInit: THandle;
 var
-  dwDMALen: DWord;
-begin
-  // if len has been set in ini file for this device - use it */
-  dwDMALen := DWord(GetPrivateProfileInt(g^.szDevicePName, 'WaveBlockLen', 0, gszIniFile));
-  if (dwDMALen <> 0) then
-  begin
-    if (dwDMALen < MINWAVEBLOCKLEN) then
-    begin dwDMALen := MINWAVEBLOCKLEN end
-    else
-    if (dwDMALen > MAXWAVEBLOCKLEN) then
-    begin dwDMALen := MAXWAVEBLOCKLEN end;
-    Result := dwDMALen;
-    exit;
-  end;
-
-  // if len has been set in ini file for the default device - use it */
-  dwDMALen := DWord(iDefBufferSize);
-  if (dwDMALen <> 0) then
-  begin
-    if (dwDMALen < MINWAVEBLOCKLEN) then
-    begin dwDMALen := MINWAVEBLOCKLEN end
-    else
-    if (dwDMALen > MAXWAVEBLOCKLEN) then
-    begin dwDMALen := MAXWAVEBLOCKLEN end;
-    Result := dwDMALen;
-    exit;
-  end;
-
-  {* if we are running on NT don't want to use our technique of flooding the wave output to
-  ** try to figure out the DMA size since the way NT protects the hardware makes this inaccurate
-  *}
-  Result := DEFAULT_NTWAVEBLOCKLEN * (lpWaveFormat^.nSamplesPerSec div 11025);
-end;
-
-function WaveMixConfigureInit(lpConfig: PMIXCONFIG): THandle;
-var
-  caps: TWAVEOUTCAPS;
-  i, iDevices: Integer;
-  u: DWord;
-  iDefRemix, iDefGoodWavePos, iDefWaveBlocks, iDefWaveBlockLen: Integer;
-  iDefSamplesPerSec, iSamplesPerSec: Integer;
+  i: Integer;
 begin
   InitLibrary;
 
-  if ((lpConfig <> nil) and (lpConfig^.wSize <> sizeof(TMIXCONFIG))) then
-  begin lpConfig := nil end;
-
-  iDevices := waveOutGetNumDevs;
-
   g := PGLOBALS(GlobalAllocPtr(GMEM_SHARE or GMEM_MOVEABLE or GMEM_ZEROINIT, sizeof(GLOBALS)));
-
-  g^.wMagic1 := MAGICNO;
-  g^.wMagic2 := MAGICNO;
 
   for i := 0 to MAXCHANNELS - 1 do
   begin g^.aChannel[i] := PCHANNELNODE(-1) end;
 
-  Move(gpFormat, g^.pcm, sizeof(TPCMWAVEFORMAT));  // default wave format */
-
-  iDefRemix := DEFAULT_REMIXALGORITHM;
-  iDefGoodWavePos := DEFAULT_GOODWAVPOS;
-  iDefWaveBlocks := DEFAULT_WAVEBLOCKS;
-  iDefWaveBlockLen := DEFAULT_WAVEBLOCKLEN and $FFFC;
-  iDefSamplesPerSec := DEFAULT_SAMPLESPERSEC;
-
-  StrCopy(g^.szDevicePName, Pointer(gszDefault));
+  g^.wMagic1 := MAGICNO;
+  g^.wMagic2 := MAGICNO;
   g^.wDeviceID := DWord(WAVE_MAPPER);
-
-  u := waveOutGetDevCaps(g^.wDeviceID, @caps, sizeof(TWAVEOUTCAPS));
-  if (u <> 0) then
-  begin StrCopy(caps.szPname, 'Unknown Device') end;
-
-  if ((caps.dwSupport and WAVECAPS_SYNC) <> 0) then
-  begin
-    GlobalFreePtr(g);
-    g := nil;
-  end;
-
-  StrCopy(g^.szDevicePName, caps.szPname);
-
   g^.pfnRemix := ResetRemix;
-
-  g^.fGoodGetPos := Boolean(GetPrivateProfileInt(g^.szDevicePName, 'GoodWavePos', iDefGoodWavePos, gszIniFile));
-  g^.iNumWaveBlocks := GetPrivateProfileInt(g^.szDevicePName, 'WaveBlocks', iDefWaveBlocks, gszIniFile);
-  if (g^.iNumWaveBlocks < MINWAVEBLOCKS) then
-  begin g^.iNumWaveBlocks := MINWAVEBLOCKS end
-  else
-  if (g^.iNumWaveBlocks > MAXWAVEBLOCKS) then
-  begin g^.iNumWaveBlocks := MAXWAVEBLOCKS end;
-
-  if ((lpConfig <> nil) and ((lpConfig^.dwFlags and WMIX_CONFIG_CHANNELS) <> 0)) then
-  begin
-    if ((lpConfig^.wChannels > 1) and (caps.wChannels > 1)) then
-    begin
-      g^.pcm.wf.nChannels := 2;
-      g^.pcm.wf.nBlockAlign := 2;  // number of bytes for one sample including both channels
-    end;
-  end;
-
-  iSamplesPerSec := GetPrivateProfileInt(g^.szDevicePName, 'SamplesPerSec', iDefSamplesPerSec, gszIniFile);
-
-  // application wants to play at a specific sampling rate */
-  if ((lpConfig <> nil) and ((lpConfig^.dwFlags and WMIX_CONFIG_SAMPLINGRATE) <> 0)) then
-  begin
-    case lpConfig^.wSamplingRate of
-      11:
-      begin iSamplesPerSec := 11 end;
-      22:
-      begin iSamplesPerSec := 22 end;
-      44:
-      begin iSamplesPerSec := 44 end;
-    end;
-  end;
-
-  // adjust the wave format if the sampling rate is no longer set to the default */
-  case iSamplesPerSec of
-    11:
-    begin g^.pcm.wf.nAvgBytesPerSec := 11025 * BYTESPERSAMPLE * g^.pcm.wf.nChannels end;
-    22:
-    begin
-      g^.pcm.wf.nSamplesPerSec := 22050;
-      g^.pcm.wf.nAvgBytesPerSec := 22050 * BYTESPERSAMPLE * g^.pcm.wf.nChannels;
-    end;
-    44:
-    begin
-      g^.pcm.wf.nSamplesPerSec := 44100;
-      g^.pcm.wf.nAvgBytesPerSec := 44100 * BYTESPERSAMPLE * g^.pcm.wf.nChannels;
-    end;
-  else
-  begin g^.pcm.wf.nAvgBytesPerSec := 11025 * BYTESPERSAMPLE * g^.pcm.wf.nChannels end;
-  end;
-
-  g^.dwWaveBlockLen := FigureOutDMABufferSize(iDefWaveBlockLen, @(g^.pcm.wf));
+  g^.fGoodGetPos := Boolean(DEFAULT_GOODWAVPOS);
+  g^.iNumWaveBlocks := DEFAULT_WAVEBLOCKS;
+  g^.pcm.wBitsPerSample := BITSPERSAMPLE;
+  g^.pcm.wf.wFormatTag := WAVE_FORMAT_PCM;
+  g^.pcm.wf.nChannels := MONO;
+  g^.pcm.wf.nBlockAlign := BYTESPERSAMPLE;
+  g^.pcm.wf.nSamplesPerSec := 44100;
+  g^.pcm.wf.nAvgBytesPerSec := 44100 * BYTESPERSAMPLE * g^.pcm.wf.nChannels;
+  g^.dwWaveBlockLen := DEFAULT_NTWAVEBLOCKLEN * 4;
 
   Result := THandle(g);
-end;
-
-function WaveMixInit: THandle;
-var
-  config: TMIXCONFIG;
-begin
-  FillChar(config, sizeof(TMIXCONFIG), 0);
-  config.wSize := sizeof(TMIXCONFIG);
-  Result := WaveMixConfigureInit(@config);
 end;
 
 procedure WaveMixCloseSession(hMixSession: THandle);

@@ -8,7 +8,7 @@ var i: integer;
 
 procedure InitWaveOut;
 begin
-  FHandle := WaveMixInit;
+  FHandle := WaveMixConfigureInit;
 
   with FPlayParams do
   begin
@@ -22,7 +22,7 @@ end;
 
 function LoadWave(FileName: string): PMixWave;
 begin
-  Result := WaveMixOpenWave(FHandle, Pointer(FileName), 0, WMIX_FILE);
+  Result := WaveMixOpenWave(FHandle, Pointer(FileName));
 end;
 
 procedure PlayWave(LSound: PMixWave);
