@@ -1754,7 +1754,7 @@ begin
 
   iDevices := waveOutGetNumDevs;
 
-  g := PGLOBALS(LocalAlloc(LPTR, sizeof(GLOBALS)));
+  g := PGLOBALS(GlobalAllocPtr(GMEM_SHARE or GMEM_MOVEABLE or GMEM_ZEROINIT, sizeof(GLOBALS)));
 
   g^.wMagic1 := MAGICNO;
   g^.wMagic2 := MAGICNO;
@@ -1779,7 +1779,7 @@ begin
 
   if ((caps.dwSupport and WAVECAPS_SYNC) <> 0) then
   begin
-    LocalFree(HLOCAL(g));
+    GlobalFreePtr(g);
     g := nil;
   end;
 
@@ -1855,7 +1855,7 @@ procedure WaveMixCloseSession(hMixSession: THandle);
 begin
   WaveMixOff(hMixSession);
   WaveMixCloseChannel(hMixSession, 0, WMIX_ALL);
-  LocalFree(HLOCAL(hMixSession));
+  GlobalFreePtr(PGLOBALS(hMixSession));
 end;
 
 procedure CreateCallbackWindowClass;
